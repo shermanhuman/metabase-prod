@@ -46,14 +46,26 @@ graph TD
 
 ## Setup Steps
 
-### 1. System Update & Basic Tools
+### 1. System Update & Software Install
 
-Ensure your system is up-to-date and install some necessary tools.
+Ensure your system is up-to-date and install software.
 
 ```bash
 sudo apt update && sudo apt upgrade -y
 sudo apt install -y wget curl gnupg software-properties-common ufw 
+
+Install Nginx and Certbot:
+
+```bash
 sudo apt install -y nginx certbot python3-certbot-nginx
+```
+
+Install PostgreSQL:
+
+```bash
+wget -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/apt.postgresql.org.gpg >/dev/null
+sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+sudo apt update
 sudo apt install -y postgresql-17 postgresql-client-17
 ```
 
