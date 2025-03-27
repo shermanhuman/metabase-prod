@@ -53,6 +53,7 @@ Ensure your system is up-to-date and install software.
 ```bash
 sudo apt update && sudo apt upgrade -y
 sudo apt install -y wget curl gnupg software-properties-common ufw 
+```
 
 Install Nginx and Certbot:
 
