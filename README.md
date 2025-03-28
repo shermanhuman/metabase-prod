@@ -52,7 +52,15 @@ Ensure your system is up-to-date and install software.
 
 ```bash
 sudo apt update && sudo apt upgrade -y
-sudo apt install -y wget curl gnupg software-properties-common ufw 
+
+sudo apt install -y wget curl gnupg software-properties-common ufw zip unzip net-tools
+```
+
+Install OpenJDK 21:
+
+```bash
+sudo apt install openjdk-21-jre-headless
+java --version 
 ```
 
 Install Nginx and Certbot:
@@ -65,8 +73,11 @@ Install PostgreSQL:
 
 ```bash
 wget -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/apt.postgresql.org.gpg >/dev/null
+
 sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+
 sudo apt update
+
 sudo apt install -y postgresql-17 postgresql-client-17
 ```
 
@@ -76,59 +87,15 @@ Allow essential ports. We'll allow Nginx Full (ports 80 & 443) and OpenSSH.
 
 ```bash
 sudo ufw allow OpenSSH
-sudo ufw allow 80/tcp
-sudo ufw allow 443/tcp
+
+sudo ufw allow 'Nginx Full'
+
 sudo ufw enable
+
 sudo ufw status
 ```
 
-### 3. Install Java 21
-
-Metabase requires Java 21. We'll use `sdkman` as a reliable way to manage Java versions.
-
-```bash
-# Install sdkman dependencies
-sudo apt install -y zip unzip
-
-# Install sdkman
-curl -s "https://get.sdkman.io" | bash
-source "$HOME/.sdkman/bin/sdkman-init.sh"
-
-# Verify sdkman installation
-sdk version
-
-# Install Java 21 (select the appropriate identifier, e.g., from Adoptium/Temurin)
-# Check available versions first if needed: sdk list java
-# Example using Temurin (Adoptium):
-sdk install java 21.0.4-tem
-# Answer 'Y' if prompted to set it as default
-
-# Verify Java installation
-java --version
-# Ensure output shows OpenJDK version 21...
-```
-
-*Note: You might need to log out and log back in, or re-source the init script (`source "$HOME/.sdkman/bin/sdkman-init.sh"`) for the `java` command to be found in new shells.*
-
-### 4. Install PostgreSQL 17.4
-
-Ubuntu 20.04's default repositories have an older version. We need to add the official PostgreSQL repository.
-
-```bash
-# Create the repository configuration file:
-sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
-
-# Import the repository signing key:
-wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
-
-# Update the package lists:
-sudo apt update
-
-# Install PostgreSQL 17:
-sudo apt -y install postgresql-17 postgresql-client-17
-```
-
-### 5. Configure PostgreSQL Database
+### 4.  Configure PostgreSQL Database
 
 Create a dedicated database and user for Metabase. Replace `<strong_password>` with a secure password.
 
@@ -136,27 +103,32 @@ Create a dedicated database and user for Metabase. Replace `<strong_password>` w
 sudo -u postgres psql -c "CREATE DATABASE metabase_app_db;"
 sudo -u postgres psql -c "CREATE USER metabase_user WITH ENCRYPTED PASSWORD '<strong_password>';"
 sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE metabase_app_db TO metabase_user;"
-# Optionally, restrict connection source later if DB is on a separate host
+sudo -u postgres psql -d metabase_app_db -c "GRANT CREATE ON SCHEMA public TO metabase_user;"
+sudo -u postgres psql -d metabase_app_db -c "GRANT USAGE ON SCHEMA public TO metabase_user;"
 ```
 
-### 6. Install Nginx
-
-Nginx will act as our reverse proxy.
+Test the new user:
 
 ```bash
-sudo apt install -y nginx
-sudo systemctl start nginx
-sudo systemctl enable nginx
+psql -U metabase_user -d metabase_app_db -h localhost -W
+CREATE TABLE permission_test (id INT);
+DROP TABLE permission_test;
+\q
 ```
 
 ### 7. Install Certbot and Obtain SSL Certificate
 
 We'll use Certbot with the Nginx plugin to automate getting a Let's Encrypt certificate. Replace `metabase.yourdomain.com` with your actual domain and `your_email@example.com` with your email.
 
-```bash
-sudo apt install -y certbot python3-certbot-nginx
+Let's start by confirming your domain name and IP address:
 
-# Obtain and install the certificate
+1.  **Get Server IP:** `curl -s ifconfig.me` contacts an external service that simply echoes back the public IP address from which the request originated. This gives you the IP address the outside world sees for your server.
+2.  **Check Domain DNS:** `dig +short your_domain.com A` queries the DNS system specifically for the `A` record (IPv4 address) associated with `your_domain.com` and shows only the result (the IP address, if found).
+3.  Compare the results. If they match, it means the DNS A record is correctly pointing to the server, and Certbot should be able to validate ownership. If not, you need to fix your DNS settings or wait longer for propagation.
+
+Now you can obtain and install the certificate:
+
+```bash
 sudo certbot --nginx -d metabase.yourdomain.com --agree-tos --email your_email@example.com --redirect --hsts --staple-ocsp
 ```
 
@@ -168,7 +140,7 @@ Verify and adjust the Nginx configuration file created/modified by Certbot. It s
 
 Ensure the `location /` block proxies requests to Metabase (which will run on port 3000).
 
-/etc/nginx/sites-available/metabase.yourdomain.com
+`/etc/nginx/sites-available/metabase.yourdomain.com`
 
 ```nginx
 server {
@@ -239,9 +211,7 @@ cd /opt/metabase
 
 # Find the latest JAR URL from https://www.metabase.com/start/oss/jar
 # Example (replace with the actual latest version URL):
-METABASE_VERSION="v0.50.10" # Check and update this!
-JAR_URL="https://downloads.metabase.com/${METABASE_VERSION}/metabase.jar"
-sudo wget -O metabase.jar ${JAR_URL}
+sudo wget -O metabase.jar https://downloads.metabase.com/v0.53.8/metabase.jar
 
 # Create a dedicated user for running Metabase (security best practice)
 sudo useradd -r -s /bin/false -d /opt/metabase metabaseuser
@@ -256,11 +226,12 @@ Create a systemd service file to manage the Metabase application. This ensures i
 
 Create the file `/etc/systemd/system/metabase.service`:
 
-```systemd /etc/systemd/system/metabase.service
+```systemd
 [Unit]
 Description=Metabase Application Server
 After=syslog.target
 After=network.target
+
 # Ensure PostgreSQL is running before Metabase starts
 Requires=postgresql.service
 After=postgresql.service
@@ -280,27 +251,14 @@ Environment="MB_DB_PORT=5432"
 Environment="MB_DB_USER=metabase_user"
 Environment="MB_DB_PASS=<strong_password>"
 Environment="MB_DB_HOST=localhost"
-# Optional: Set site URL if Nginx is handling HTTPS
-# Environment="MB_SITE_URL=https://metabase.yourdomain.com"
+Environment="MB_SITE_URL=https://metabase.yourdomain.com"
 # Optional: Change the port Metabase listens on if needed (default 3000)
 # Environment="MB_JETTY_PORT=3000"
 
-# Path to Java executable (adjust if sdkman installs elsewhere or if not default)
-# Find the correct path using: which java OR readlink -f $(which java)
-# Common path with sdkman default: /home/<user>/.sdkman/candidates/java/current/bin/java
-# If installed system-wide, might be /usr/lib/jvm/java-21-openjdk-amd64/bin/java or similar
-# IMPORTANT: Run `which java` AS THE USER WHO INSTALLED JAVA WITH SDKMAN
-# If installed as root or another user, adjust the path or install system-wide Java.
-# Assuming Java 21 installed via sdkman by the *current sudo user* is the default:
-# ExecStart=/home/YOUR_SUDO_USER/.sdkman/candidates/java/current/bin/java -jar metabase.jar
-#
-# SAFER APPROACH: Use the absolute path found via `readlink -f $(which java)`
-# Example - **REPLACE THIS PATH** with the output of `readlink -f $(which java)`
-ExecStart=/usr/lib/jvm/temurin-21-jdk-amd64/bin/java -jar metabase.jar
 
-# Alternative using `Environment` for Java path (if needed)
-# Environment="PATH=/home/YOUR_SUDO_USER/.sdkman/candidates/java/current/bin:$PATH"
-# ExecStart=/bin/sh -c "exec java -jar metabase.jar"
+# Path to Java executable
+# Java path can be checked with the output of `readlink -f $(which java)`
+ExecStart=/usr/lib/jvm/java-21-openjdk-amd64/bin/java -jar metabase.jar
 
 # Standard output and error logging
 StandardOutput=syslog
@@ -331,7 +289,7 @@ Reload systemd, start the Metabase service, and enable it to start on boot.
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl start metabase
+
 sudo systemctl enable metabase
 
 # Check the status
